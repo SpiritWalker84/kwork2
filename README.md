@@ -48,8 +48,13 @@ Repo → **Settings** → **Secrets and variables** → **Actions** → **New re
 
 Actions → **Kwork IT monitor** → **Run workflow**.
 
-Первый запуск: сообщение «мониторинг запущен» + текущие релевантные заказы.  
-Дальше — только **новые** на стр. 1–2.
+Первый запуск: «мониторинг запущен» + текущие ⭐ (Python/TG/AI/n8n).  
+Дальше — только **новые ⭐**. Сайты, Tilda, iOS, Java — отсеиваются.
+
+Фильтр ⭐:
+- **Сильные:** telegram, aiogram, python, openai, rag, n8n, fastapi, mini app
+- **Мягкие** (от 10k): парсинг, мониторинг, автоматизация, API
+- **Минус:** tilda, wordpress, ios, java, лендинг, копия сайта, figma, seo…
 
 ## Если workflow падает с exit code 1
 
@@ -61,7 +66,8 @@ Actions → **Kwork IT monitor** → **Run workflow**.
 |---------------|-------------|
 | `TELEGRAM_BOT_TOKEN не задан` | Settings → Secrets → добавить оба secret |
 | `chat not found` | Напишите **вашему боту** `/start`, затем обновите `TELEGRAM_CHAT_ID` |
-| `Unauthorized` | Неверный token от @BotFather |
+| `Unauthorized` / 401 | Неверный token от @BotFather |
+| **403 Forbidden** | **Не нажали /start у бота** или указали **не тот chat_id** (нужен *ваш* Id, не id бота) |
 | `can't parse entities` | Обновите код (исправлено экранирование HTML) |
 
 В логе шага **Run monitor** смотрите строку `ERROR: ...` — там точная причина.

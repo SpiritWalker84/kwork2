@@ -18,6 +18,9 @@ PAGES = (1, 2)
 USER_AGENT = "Mozilla/5.0 (compatible; KworkMonitor/1.0)"
 SNAPSHOT_PATH = Path(os.environ.get("KWORK_SNAPSHOT", ".snapshot.json"))
 
+MIN_STAR_PRICE = 5000
+MIN_SOFT_PRICE = 10000
+
 NEGATIVE_PATTERNS = (
     r"массов(ый|ого|ые)\s+инвайт",
     r"инвайт.*вконтакт",
@@ -29,7 +32,45 @@ NEGATIVE_PATTERNS = (
     r"регистратор каналов",
 )
 
-POSITIVE_KEYWORDS = (
+NEGATIVE_KEYWORDS = (
+    "tilda",
+    "тильд",
+    "wordpress",
+    "вордпресс",
+    "elementor",
+    " ios",
+    "ios ",
+    "android",
+    "swift",
+    "kotlin",
+    "flutter",
+    " java",
+    "java ",
+    "typescript",
+    "javascript",
+    " react",
+    " vue",
+    "laravel",
+    "лендинг",
+    "landing",
+    "копия сайта",
+    "копию сайта",
+    " figma",
+    "верстк",
+    "верстка",
+    "unity",
+    "webgl",
+    " seo",
+    "битрикс",
+    "bitrix",
+    "modx",
+    "woocommerce",
+    "инфографик",
+    "дизайн сайта",
+    "сверстать",
+)
+
+STRONG_KEYWORDS = (
     "telegram",
     "телеграм",
     "тг-бот",
@@ -39,21 +80,30 @@ POSITIVE_KEYWORDS = (
     "aiogram",
     "python",
     "openai",
+    "chatgpt",
     "gpt",
     "rag",
+    "llm",
     "n8n",
+    "prompt",
+    "промпт",
+    "fastapi",
+    "mini app",
+    "mini-app",
+    "ии-бот",
+    "ii-бот",
+)
+
+SOFT_KEYWORDS = (
     "парсер",
     "парсинг",
     "мониторинг",
-    "fastapi",
+    "автоматиза",
     "docker",
     "postgresql",
-    "ии-",
-    " ai ",
-    "llm",
-    "автоматиза",
-    "mini app",
-    "mini-app",
+    "backend",
+    "бекенд",
+    "api",
 )
 
 
@@ -109,22 +159,38 @@ def is_blocked(want: dict) -> bool:
     return any(re.search(pattern, text) for pattern in NEGATIVE_PATTERNS)
 
 
-def relevance_score(want: dict) -> int:
-    if is_blocked(want):
-        return -1
+def is_negative(want: dict) -> bool:
     text = want_text(want)
-    score = sum(1 for keyword in POSITIVE_KEYWORDS if keyword in text)
+    if is_blocked(want):
+        return True
+    return any(keyword in text for keyword in NEGATIVE_KEYWORDS)
+
+
+def is_star_relevant(want: dict) -> bool:
+    if is_negative(want):
+        return False
+
+    text = want_text(want)
     price = float(want.get("priceLimit") or 0)
-    if price >= 10000:
-        score += 2
-    elif price >= 5000:
-        score += 1
-    return score
+    if price < MIN_STAR_PRICE:
+        return False
+
+    if any(keyword in text for keyword in STRONG_KEYWORDS):
+        return True
+    if price >= MIN_SOFT_PRICE and any(keyword in text for keyword in SOFT_KEYWORDS):
+        return True
+    return False
+
+
+def star_sort_key(want: dict) -> tuple[int, float]:
+    text = want_text(want)
+    strong = sum(1 for keyword in STRONG_KEYWORDS if keyword in text)
+    return (strong, float(want.get("priceLimit") or 0))
 
 
 def validate_config() -> tuple[str, str]:
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip().strip('"').strip("'")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip().strip('"').strip("'")
     if not token:
         raise RuntimeError(
             "Не задан TELEGRAM_BOT_TOKEN. Добавьте Secret в GitHub: "
@@ -135,7 +201,34 @@ def validate_config() -> tuple[str, str]:
             "Не задан TELEGRAM_CHAT_ID. Напишите боту /start и возьмите id "
             "через @getmyid_bot"
         )
+    if not re.fullmatch(r"\d+:[A-Za-z0-9_-]+", token):
+        raise RuntimeError(
+            "TELEGRAM_BOT_TOKEN похож на неверный формат. "
+            "Скопируйте token из @BotFather целиком, без кавычек и пробелов."
+        )
     return token, chat_id
+
+
+def check_telegram_bot(token: str) -> str:
+    response = requests.get(
+        f"https://api.telegram.org/bot{token}/getMe",
+        timeout=30,
+    )
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise RuntimeError(
+            f"Telegram getMe вернул не-JSON ({response.status_code})"
+        ) from exc
+    if not data.get("ok"):
+        description = data.get("description", "unknown error")
+        raise RuntimeError(
+            f"Неверный TELEGRAM_BOT_TOKEN: {description}. "
+            "Создайте token заново в @BotFather и обновите Secret."
+        )
+    username = data["result"]["username"]
+    print(f"telegram bot ok: @{username}")
+    return username
 
 
 def escape_html(text: str) -> str:
@@ -174,43 +267,47 @@ def format_project(want: dict, *, mark_relevant: bool) -> str:
 
 def build_message(projects: list[dict], *, total: int, new_projects: list[dict]) -> str | None:
     now = datetime.now(ZoneInfo("Europe/Moscow")).strftime("%d.%m.%Y %H:%M")
-    relevant_new = [want for want in new_projects if relevance_score(want) >= 2]
+    star_new = sorted(
+        [want for want in new_projects if is_star_relevant(want)],
+        key=star_sort_key,
+        reverse=True,
+    )
 
-    if not new_projects:
+    if not star_new:
         return None
 
-    lines = [f"<b>Kwork IT</b> · {now} (МСК)", f"Всего в категории: {total}", ""]
-
-    if relevant_new:
-        lines.append(f"<b>Релевантные новые ({len(relevant_new)}):</b>")
-        for want in relevant_new[:8]:
-            lines.append(format_project(want, mark_relevant=True))
-        lines.append("")
-
-    other_new = [want for want in new_projects if want not in relevant_new][:6]
-    if other_new:
-        lines.append(f"<b>Остальные новые ({len(new_projects) - len(relevant_new)}):</b>")
-        for want in other_new:
-            lines.append(format_project(want, mark_relevant=False))
+    lines = [
+        f"<b>Kwork IT</b> · {now} (МСК)",
+        f"Всего в категории: {total}",
+        f"<b>Новые ⭐ ({len(star_new)}):</b>",
+        "",
+    ]
+    for want in star_new[:8]:
+        lines.append(format_project(want, mark_relevant=True))
 
     return "\n".join(lines)
 
 
 def build_bootstrap_message(projects: list[dict], *, total: int) -> str:
     now = datetime.now(ZoneInfo("Europe/Moscow")).strftime("%d.%m.%Y %H:%M")
-    relevant = [want for want in projects if relevance_score(want) >= 2]
+    relevant = sorted(
+        [want for want in projects if is_star_relevant(want)],
+        key=star_sort_key,
+        reverse=True,
+    )
     lines = [
         f"<b>Kwork мониторинг запущен</b> · {now} (МСК)",
         f"Отслеживаю стр. 1–2, сейчас проектов: {len(projects)} (в категории {total}).",
-        "Дальше буду присылать только <b>новые</b> заказы.",
+        "Фильтр: Python / Telegram / AI / n8n / парсинг от 10k.",
+        "Дальше — только <b>новые ⭐</b>.",
         "",
     ]
     if relevant:
-        lines.append(f"<b>Сейчас релевантные ({len(relevant)}):</b>")
+        lines.append(f"<b>Сейчас ⭐ ({len(relevant)}):</b>")
         for want in relevant[:10]:
             lines.append(format_project(want, mark_relevant=True))
     else:
-        lines.append("Релевантных на первых двух страницах сейчас нет.")
+        lines.append("⭐ на первых двух страницах сейчас нет.")
     return "\n".join(lines)
 
 
@@ -250,17 +347,28 @@ def send_telegram(text: str) -> None:
         if not response.ok or not data.get("ok"):
             description = data.get("description", response.text[:300])
             hint = ""
-            if "chat not found" in description.lower():
+            lowered = description.lower()
+            if response.status_code == 403 or "can't initiate conversation" in lowered:
+                hint = (
+                    " Напишите боту /start в личке Telegram. "
+                    "TELEGRAM_CHAT_ID = ваш Id (из @getmyid_bot), не id бота."
+                )
+            elif "blocked" in lowered:
+                hint = " Разблокируйте бота в Telegram."
+            elif "chat not found" in lowered:
                 hint = " Напишите боту /start и проверьте TELEGRAM_CHAT_ID."
-            elif "can't parse entities" in description.lower():
+            elif "can't parse entities" in lowered:
                 hint = " Ошибка HTML в тексте сообщения."
-            raise RuntimeError(f"Telegram API: {description}.{hint}")
+            elif response.status_code == 401 or "unauthorized" in lowered:
+                hint = " Проверьте TELEGRAM_BOT_TOKEN в Secrets."
+            raise RuntimeError(f"Telegram API ({response.status_code}): {description}.{hint}")
 
         print("telegram chunk sent")
 
 
 def main() -> int:
-    validate_config()
+    token, _chat_id = validate_config()
+    check_telegram_bot(token)
     snapshot = load_snapshot()
     known_ids = {int(item) for item in snapshot.get("known_ids", [])}
     projects, total = fetch_projects()
@@ -286,9 +394,9 @@ def main() -> int:
 
     if message:
         send_telegram(message)
-        print(f"sent {len(new_projects)} new projects")
+        print(f"sent {len([w for w in new_projects if is_star_relevant(w)])} star projects")
     else:
-        print("no new projects")
+        print("no star projects")
     return 0
 
 
