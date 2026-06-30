@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import json
 import os
 import re
@@ -121,6 +122,26 @@ def relevance_score(want: dict) -> int:
     return score
 
 
+def validate_config() -> tuple[str, str]:
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    if not token:
+        raise RuntimeError(
+            "Не задан TELEGRAM_BOT_TOKEN. Добавьте Secret в GitHub: "
+            "Settings → Secrets → Actions"
+        )
+    if not chat_id:
+        raise RuntimeError(
+            "Не задан TELEGRAM_CHAT_ID. Напишите боту /start и возьмите id "
+            "через @getmyid_bot"
+        )
+    return token, chat_id
+
+
+def escape_html(text: str) -> str:
+    return html.escape(text, quote=False)
+
+
 def fetch_projects() -> tuple[list[dict], int]:
     projects: list[dict] = []
     total = 0
@@ -143,9 +164,12 @@ def fetch_projects() -> tuple[list[dict], int]:
 def format_project(want: dict, *, mark_relevant: bool) -> str:
     want_id = want["id"]
     price = int(float(want.get("priceLimit") or 0))
-    title = want.get("name", "").strip()
+    title = escape_html(want.get("name", "").strip())
     prefix = "⭐ " if mark_relevant else "• "
-    return f'{prefix}<a href="https://kwork.ru/projects/{want_id}">{title}</a>\n{price:,} ₽'.replace(",", " ")
+    return (
+        f'{prefix}<a href="https://kwork.ru/projects/{want_id}">{title}</a>\n'
+        f"{price:,} ₽".replace(",", " ")
+    )
 
 
 def build_message(projects: list[dict], *, total: int, new_projects: list[dict]) -> str | None:
@@ -191,11 +215,7 @@ def build_bootstrap_message(projects: list[dict], *, total: int) -> str:
 
 
 def send_telegram(text: str) -> None:
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
-    if not token or not chat_id:
-        raise RuntimeError("Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
-
+    token, chat_id = validate_config()
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     chunks: list[str] = []
     if len(text) <= 4000:
@@ -213,23 +233,34 @@ def send_telegram(text: str) -> None:
             chunks.append(current)
 
     for chunk in chunks:
-        response = requests.post(
-            url,
-            json={
-                "chat_id": chat_id,
-                "text": chunk,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": True,
-            },
-            timeout=30,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        if not payload.get("ok"):
-            raise RuntimeError(f"Telegram error: {payload}")
+        payload = {
+            "chat_id": chat_id,
+            "text": chunk,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
+        response = requests.post(url, json=payload, timeout=30)
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Telegram вернул не-JSON ({response.status_code}): {response.text[:300]}"
+            ) from exc
+
+        if not response.ok or not data.get("ok"):
+            description = data.get("description", response.text[:300])
+            hint = ""
+            if "chat not found" in description.lower():
+                hint = " Напишите боту /start и проверьте TELEGRAM_CHAT_ID."
+            elif "can't parse entities" in description.lower():
+                hint = " Ошибка HTML в тексте сообщения."
+            raise RuntimeError(f"Telegram API: {description}.{hint}")
+
+        print("telegram chunk sent")
 
 
 def main() -> int:
+    validate_config()
     snapshot = load_snapshot()
     known_ids = {int(item) for item in snapshot.get("known_ids", [])}
     projects, total = fetch_projects()

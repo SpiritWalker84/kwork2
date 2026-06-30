@@ -51,7 +51,20 @@ Actions → **Kwork IT monitor** → **Run workflow**.
 Первый запуск: сообщение «мониторинг запущен» + текущие релевантные заказы.  
 Дальше — только **новые** на стр. 1–2.
 
-## Локальный тест
+## Если workflow падает с exit code 1
+
+**Предупреждение про Node.js 20** — это warning, не причина падения.
+
+Частые причины:
+
+| Ошибка в логе | Что сделать |
+|---------------|-------------|
+| `TELEGRAM_BOT_TOKEN не задан` | Settings → Secrets → добавить оба secret |
+| `chat not found` | Напишите **вашему боту** `/start`, затем обновите `TELEGRAM_CHAT_ID` |
+| `Unauthorized` | Неверный token от @BotFather |
+| `can't parse entities` | Обновите код (исправлено экранирование HTML) |
+
+В логе шага **Run monitor** смотрите строку `ERROR: ...` — там точная причина.
 
 ```powershell
 cd c:\projects\zakaz1\kwork-monitor
